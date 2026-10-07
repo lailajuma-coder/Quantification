@@ -119,3 +119,13 @@ test('API proxy forwards only required decode metadata and no-store headers', ()
   assert.equal(forwarded['X-KidneyQuant-Source-SHA256'], VALID_SHA256);
   assert.equal('X-Internal-Only' in forwarded, false);
 });
+
+test('channel mapping is validated and forwarded without losing source channel identity', () => {
+  const mapping={method:'source-order',sourceIndices:[0,1],sourceNames:['dapi','GFP']};
+  const headers=validMetadataHeaders({'X-KidneyQuant-Channel-Mapping':JSON.stringify(mapping)});
+  assert.deepEqual(parseCompanionMetadata(headers).channelMapping,mapping);
+  assert.equal(forwardedCompanionHeaders(headers)['X-KidneyQuant-Channel-Mapping'],JSON.stringify(mapping));
+  for(const invalid of [{...mapping,sourceIndices:[0,0]},{...mapping,sourceIndices:[1,0]},{...mapping,sourceNames:['only one']},{...mapping,method:'nd2-color-metadata'}]) {
+    assert.throws(()=>parseCompanionMetadata(validMetadataHeaders({'X-KidneyQuant-Channel-Mapping':JSON.stringify(invalid)})),/channel mapping/i);
+  }
+});

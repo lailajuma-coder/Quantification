@@ -16,16 +16,18 @@ test('folder files are filtered and naturally sorted by relative path', () => {
   );
 });
 
-test('an RGB channel is rendered in place as a grayscale Fiji-style view', () => {
-  const pixels = new Uint8ClampedArray([
-    10, 20, 30, 255,
-    40, 50, 60, 255,
-  ]);
-
-  assert.equal(applyChannelViewInPlace(pixels, 'green'), pixels);
-  assert.deepEqual(Array.from(pixels), [20, 20, 20, 255, 50, 50, 50, 255]);
-
-  const composite = new Uint8ClampedArray([1, 2, 3, 255]);
-  applyChannelViewInPlace(composite, 'composite');
-  assert.deepEqual(Array.from(composite), [1, 2, 3, 255]);
+test('RGB channel views preserve the selected intensity and alpha in the matching color', () => {
+  const source = new Uint8ClampedArray([10, 20, 30, 255, 40, 50, 60, 128]);
+  const expected = {
+    red: [10, 0, 0, 255, 40, 0, 0, 128],
+    green: [0, 20, 0, 255, 0, 50, 0, 128],
+    blue: [0, 0, 30, 255, 0, 0, 60, 128],
+    composite: Array.from(source),
+  };
+  for (const [channel, values] of Object.entries(expected)) {
+    const pixels = new Uint8ClampedArray(source);
+    assert.equal(applyChannelViewInPlace(pixels, channel), pixels);
+    assert.deepEqual(Array.from(pixels), values);
+  }
+  assert.deepEqual(Array.from(source), [10, 20, 30, 255, 40, 50, 60, 128]);
 });

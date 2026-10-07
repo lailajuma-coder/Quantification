@@ -17,7 +17,7 @@ export function prepareMicroscopyFiles(files) {
 }
 
 /**
- * Convert one RGB component to grayscale in an existing working buffer.
+ * Show one RGB component in its own color in an existing working buffer.
  * @param {Uint8ClampedArray} pixels
  * @param {'composite' | 'red' | 'green' | 'blue'} channel
  */
@@ -28,9 +28,9 @@ export function applyChannelViewInPlace(pixels, channel) {
 
   for (let offset = 0; offset < pixels.length; offset += 4) {
     const value = pixels[offset + component];
-    pixels[offset] = value;
-    pixels[offset + 1] = value;
-    pixels[offset + 2] = value;
+    pixels[offset] = component === 0 ? value : 0;
+    pixels[offset + 1] = component === 1 ? value : 0;
+    pixels[offset + 2] = component === 2 ? value : 0;
   }
   return pixels;
 }

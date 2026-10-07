@@ -1,8 +1,10 @@
+import type { StainingPanel } from './stain-channels';
 import type { AnalysisResult, DecodedImage, RoiRect } from './image-analysis';
 
-export const ANALYSIS_SCHEMA_VERSION = '1.0.0-experimental';
+export const ANALYSIS_SCHEMA_VERSION = '1.4.0-experimental';
 
 export type AnalysisSettingsSnapshot = {
+  stainingPanel?: StainingPanel;
   stain: string;
   signalChannel: 'red' | 'green' | 'blue' | 'grayscale';
   structure: string;
@@ -18,6 +20,7 @@ type BuildAnalysisRecordInput = {
   analyzedAt: string;
   analyst: string;
   sampleId: string;
+  groupName?: string;
   sourceName: string;
   sourceSize: number;
   sourceLastModified: number;
@@ -32,6 +35,7 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
   const metrics = {
     analyzedPixels: result.analyzedPixels,
     positivePixels: result.positivePixels,
+    ...(result.positiveMean === undefined ? {} : {meanPositive:result.positiveMean,stdDevPositive:result.positiveStdDev!,sumPositive:result.positiveSum!,minPositive:result.positiveMin!,maxPositive:result.positiveMax!}),
     positivePercent: result.positivePercent,
     meanScoreAllAnalyzedPixels: result.mean,
     modeScoreAllAnalyzedPixels: result.mode,
@@ -46,6 +50,11 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
   };
   const metricDefinitions = {
     analyzedPixels: 'Pixels inside the whole-image or analyst-defined ROI mask after any enabled background exclusion',
+    meanPositive: 'Mean intensity of threshold-positive pixels (zero if none)',
+    stdDevPositive: 'Sample standard deviation of threshold-positive intensities (zero with fewer than two pixels)',
+    sumPositive: 'Raw integrated intensity of threshold-positive pixels',
+    minPositive: 'Minimum threshold-positive intensity (zero if none)',
+    maxPositive: 'Maximum threshold-positive intensity (zero if none)',
     positivePixels: 'Analyzed pixels with a stain score inside the inclusive minimum and maximum thresholds',
     positivePercent: 'Positive pixels divided by analyzed pixels, multiplied by 100',
     meanScoreAllAnalyzedPixels: 'Arithmetic mean stain score over all analyzed pixels',
@@ -59,6 +68,7 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
     backgroundPositivePercent: 'Background-positive pixels divided by background pixels, multiplied by 100; zero when no background pixels exist',
     excludedPercent: 'Background pixels divided by all source-image pixels, multiplied by 100',
   };
+  if(result.positiveMean === undefined) for(const key of ['meanPositive','stdDevPositive','sumPositive','minPositive','maxPositive'] as const) Object.defineProperty(metricDefinitions,key,{enumerable:false});
   if (!reportsBackground) {
     // JSON exports include enumerable fields only; exclude mode must not report these values or definitions.
     for (const key of ['backgroundPixels', 'backgroundPositivePixels', 'backgroundPositivePercent'] as const) {
@@ -83,6 +93,7 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
     analyzedAt: input.analyzedAt,
     analyst: input.analyst,
     sampleId: input.sampleId,
+    groupName: input.groupName ?? 'Ungrouped',
     source: {
       name: input.sourceName,
       sizeBytes: input.sourceSize,
@@ -95,6 +106,10 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
       selectedShape: image.selectedShape,
       selectedAxes: [...image.selectedAxes],
       channelCount: image.channelCount,
+      pixelSizeMicrons: image.pixelSizeMicrons ? [...image.pixelSizeMicrons] : null,
+      analysisWorkflow: image.analysisWorkflow ?? 'native',
+      conversionRanges: image.conversionRanges?.map(range=>({...range})) ?? null,
+      ...(image.channelMapping ? { channelMapping: { ...image.channelMapping, sourceIndices: [...image.channelMapping.sourceIndices], sourceNames: [...image.channelMapping.sourceNames] } } : {}),
       planeSelection: { ...image.planeSelection },
       processing: image.processing,
       processingLocation: image.processingLocation,
@@ -102,25 +117,32 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
       sha256: image.sourceSha256,
     },
     analysis: {
+      stainingPanel: {
+        coStained: settings.stainingPanel?.coStained ?? 'unspecified',
+        activeId: settings.stainingPanel?.activeId ?? null,
+        assignments: settings.stainingPanel?.assignments.map((assignment) => ({ ...assignment })) ?? [],
+      },
       stain: settings.stain,
       signalChannel: settings.signalChannel,
       structureCategory: settings.structure,
       minThreshold: settings.minThreshold,
       maxThreshold: settings.maxThreshold,
+      scoreBitDepth: image.analysisWorkflow === 'sirius-magenta' ? 32 : image.analysisBitDepth ?? 8,
+      intensitySource: image.analysisWorkflow ? 'converted-8bit-analysis-copy' : image.samples ? 'native-integer-samples' : '8bit-display',
       thresholdBounds: 'inclusive' as const,
       removeBackground: settings.removeBackground,
       backgroundTolerance: settings.backgroundTolerance,
       outsideMode: settings.removeBackground ? settings.outsideMode : 'exclude',
-      rois: settings.rois.map((roi) => ({ ...roi })),
+      rois: settings.rois.map((roi) => ({ ...roi, ...(roi.points ? {points:roi.points.map(point=>({...point}))}: {}) })),
     },
     metrics,
     metricDefinitions,
     algorithms: {
-      stainScore: 'kidneyquant-rgb-score-v1-experimental',
+      stainScore: image.analysisWorkflow === 'sirius-magenta' ? 'CMYK-magenta-(maxRGB-G)/maxRGB; undefined black scores excluded' : image.samples ? 'kidneyquant-native-integer-score-v2-experimental' : 'kidneyquant-rgb-score-v1-experimental',
       background: settings.removeBackground ? 'border-connected-source-rgb-distance-v1' : 'disabled',
       perimeter: '4-neighbor-grid-edge-v1',
     },
-    calibration: null,
+    calibration: image.pixelSizeMicrons ? {pixelWidthMicrons:image.pixelSizeMicrons[0],pixelHeightMicrons:image.pixelSizeMicrons[1],source:'ND2 metadata',screenUnits:'pixels',excelAreaUnits:'µm²'} : null,
     warnings: [
       'Research use only: stain transforms and thresholds are not validated for publication or clinical use.',
       image.processing === 'native-8bit' ? null : `Source pixels were processed as ${image.processing}.`,
@@ -159,6 +181,7 @@ export function analysisRecordToCsv(record: AnalysisRecord) {
     ['Analyzed_At', record.analyzedAt],
     ['Analyst', record.analyst],
     ['Sample_ID', record.sampleId],
+    ['Group', record.groupName],
     ['Source_File', record.source.name],
     ['Source_Size_Bytes', record.source.sizeBytes],
     ['Source_Last_Modified_Ms', record.source.lastModifiedMs],
@@ -170,6 +193,12 @@ export function analysisRecordToCsv(record: AnalysisRecord) {
     ['Selected_Shape', record.source.selectedShape],
     ['Selected_Axes', record.source.selectedAxes.join(',')],
     ['Channel_Count', record.source.channelCount],
+    ['Analysis_Workflow', record.source.analysisWorkflow],
+    ['Conversion_Ranges', JSON.stringify(record.source.conversionRanges)],
+    ['Mean_Positive', record.metrics.meanPositive ?? null],
+    ['StdDev_Positive', record.metrics.stdDevPositive ?? null],
+    ['RawIntDen_Positive', record.metrics.sumPositive ?? null],
+    ['Channel_Mapping', JSON.stringify(record.source.channelMapping ?? null)],
     ['Plane_Selection', JSON.stringify(record.source.planeSelection)],
     ['Processing', record.source.processing],
     ['Processing_Location', record.source.processingLocation],
@@ -177,9 +206,14 @@ export function analysisRecordToCsv(record: AnalysisRecord) {
     ['Source_SHA256', record.source.sha256],
     ['Stain', record.analysis.stain],
     ['Signal_Channel', record.analysis.signalChannel],
+    ['Co_Stained', record.analysis.stainingPanel.coStained],
+    ['Active_Stain_ID', record.analysis.stainingPanel.activeId],
+    ['Stain_Channel_Assignments', JSON.stringify(record.analysis.stainingPanel.assignments)],
     ['Structure_Category', record.analysis.structureCategory],
     ['Min_Threshold', record.analysis.minThreshold],
     ['Max_Threshold', record.analysis.maxThreshold],
+    ['Score_Bit_Depth', record.analysis.scoreBitDepth],
+    ['Intensity_Source', record.analysis.intensitySource],
     ['Threshold_Bounds', record.analysis.thresholdBounds],
     ['Remove_Background', record.analysis.removeBackground],
     ['Background_Tolerance', record.analysis.backgroundTolerance],
@@ -197,7 +231,7 @@ export function analysisRecordToCsv(record: AnalysisRecord) {
     ...backgroundFields,
     ['Excluded_Percent', record.metrics.excludedPercent.toFixed(4)],
     ['Metric_Definitions', JSON.stringify(record.metricDefinitions)],
-    ['Calibration', record.calibration],
+    ['Calibration', record.calibration ? JSON.stringify(record.calibration) : null],
     ['Algorithms', JSON.stringify(record.algorithms)],
     ['Warnings', JSON.stringify(record.warnings)],
   ];

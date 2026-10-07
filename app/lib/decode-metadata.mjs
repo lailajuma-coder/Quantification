@@ -7,6 +7,7 @@ const metadataHeaderNames = [
   'X-KidneyQuant-Selected-Shape',
   'X-KidneyQuant-Selected-Axes',
   'X-KidneyQuant-Channel-Count',
+  'X-KidneyQuant-Channel-Mapping',
   'X-KidneyQuant-Plane-Selection',
   'X-KidneyQuant-Processing',
   'X-KidneyQuant-Quantitative-Status',
@@ -89,6 +90,25 @@ function planeSelectionHeader(headers, name, originalAxes, selectedAxes) {
   return parsed;
 }
 
+function channelMappingHeader(headers, count) {
+  const raw = headers.get('X-KidneyQuant-Channel-Mapping');
+  if (!raw) return undefined;
+  let mapping;
+  try { mapping = JSON.parse(raw); } catch { throw new Error('Invalid channel mapping metadata.'); }
+  if (!mapping || !['nd2-color-metadata', 'source-order'].includes(mapping.method)
+    || !Array.isArray(mapping.sourceIndices) || mapping.sourceIndices.length !== count
+    || new Set(mapping.sourceIndices).size !== count
+    || mapping.sourceIndices.some(index => !Number.isInteger(index) || index < 0 || index >= count)
+    || !Array.isArray(mapping.sourceNames) || mapping.sourceNames.length !== count
+    || mapping.sourceNames.some(name => typeof name !== 'string' || name.length > 200)
+    || (mapping.method === 'nd2-color-metadata' && count !== 3)
+    || (mapping.method === 'source-order' && mapping.sourceIndices.some((index, position) => index !== position))) {
+    throw new Error('Invalid channel mapping metadata.');
+  }
+  if(mapping.pixelSizeMicrons !== undefined && (!Array.isArray(mapping.pixelSizeMicrons) || mapping.pixelSizeMicrons.length!==2 || mapping.pixelSizeMicrons.some(v=>!Number.isFinite(v)||v<=0))) throw new Error('Invalid spatial calibration.');
+  return mapping;
+}
+
 /**
  * @param {Headers} headers
  * @returns {{
@@ -99,6 +119,7 @@ function planeSelectionHeader(headers, name, originalAxes, selectedAxes) {
  *   selectedShape: string,
  *   selectedAxes: string[],
  *   channelCount: number,
+ *   channelMapping?: {method: string, sourceIndices: number[], sourceNames: string[], pixelSizeMicrons?: number[]},
  *   planeSelection: Record<string, number | string>,
  *   processing: string,
  *   quantitativeStatus: 'experimental' | 'demonstration',
@@ -147,6 +168,7 @@ export function parseCompanionMetadata(headers) {
     selectedShape,
     selectedAxes,
     channelCount,
+    ...(channelMappingHeader(headers, channelCount) ? { channelMapping: channelMappingHeader(headers, channelCount) } : {}),
     planeSelection: planeSelectionHeader(headers, 'X-KidneyQuant-Plane-Selection', originalAxes, selectedAxes),
     processing: requiredHeader(headers, 'X-KidneyQuant-Processing'),
     quantitativeStatus: status,

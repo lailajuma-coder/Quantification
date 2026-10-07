@@ -1,0 +1,4 @@
+import type {RoiRect} from './lib/image-analysis';
+export default function RoiEditor({rois,onUpdate,onDelete}:{rois:RoiRect[];onUpdate:(index:number,field:'x'|'y'|'width'|'height',value:number)=>void;onDelete:(index:number)=>void}) {
+ return <div className="roi-editor" aria-label="ROI coordinate editor">{rois.map((roi,index)=><div className="roi-row" key={index}><strong>R{index+1}</strong>{roi.points?<span>Freehand outline ({roi.points.length} points)</span>:(['x','y','width','height'] as const).map(field=><label className="roi-coordinate" key={field}><span>{field}</span><input type="number" min="0" step="1" aria-label={`Region ${index+1} ${field}`} value={Math.round(roi[field])} onChange={e=>onUpdate(index,field,Number(e.target.value))}/></label>)}<button type="button" className="roi-delete" aria-label={`Delete region ${index+1}`} onClick={()=>onDelete(index)}>Delete</button></div>)}</div>;
+}

@@ -103,18 +103,31 @@ export async function POST(request: Request) {
       method: 'POST',
       headers: {
         'content-type': 'application/octet-stream',
+        'accept': request.headers.get('accept') === 'application/vnd.kidneyquant.samples+gzip'
+          ? 'application/vnd.kidneyquant.samples+gzip' : 'image/png',
         'content-length': String(contentLength),
         'x-kidneyquant-file-extension': `.${extension}`,
       },
       body: request.body,
-      redirect: 'error',
-      signal: AbortSignal.timeout(15 * 60 * 1000),
+      // Workerd supports manual/follow, but rejects redirect: 'error'.
+      // Inspect redirects explicitly so uploaded data never follows a new URL.
+      redirect: 'manual',
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15 * 60 * 1000)]),
       // @ts-expect-error Node fetch requires duplex for a streamed request body.
       duplex: 'half',
     });
-  } catch {
+  } catch (error) {
+    console.error('Companion request failed:', error);
     return Response.json(
       { error: 'The private image companion is unavailable. Try again after the service recovers.' },
+      { status: 502, headers: { 'cache-control': 'no-store' } },
+    );
+  }
+
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    return Response.json(
+      { error: 'The private image companion returned a redirect. Configure its direct service address.' },
       { status: 502, headers: { 'cache-control': 'no-store' } },
     );
   }

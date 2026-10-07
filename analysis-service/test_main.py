@@ -474,3 +474,41 @@ class DecodeEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeSampleTests(unittest.TestCase):
+    def test_native_transport_preserves_sixteen_bit_neighbors_and_endianness(self):
+        import gzip
+        import tifffile
+        from main import decode_samples
+        values = np.array([[0, 1000, 1001, 65535]], dtype=np.uint16)
+        with TemporaryDirectory() as directory:
+            for byteorder in ("<", ">"):
+                path = Path(directory) / "native.tif"
+                tifffile.imwrite(path, values, byteorder=byteorder, photometric="minisblack")
+                decoded, body = decode_samples(path, ".tif")
+                restored = np.frombuffer(gzip.decompress(body), dtype="<u2").reshape(values.shape)
+                np.testing.assert_array_equal(restored, values)
+                self.assertEqual(decoded.significant_bits, 16)
+                self.assertEqual(decoded.display.size, 0)
+
+    def test_endpoint_negotiates_native_transport_and_preserves_metadata(self):
+        import gzip
+        import tifffile
+        from fastapi.testclient import TestClient
+        from main import app
+        content = BytesIO()
+        values = np.array([[1000, 1001, 65535]], dtype=np.uint16)
+        tifffile.imwrite(content, values, photometric="minisblack")
+        body = content.getvalue()
+        with TestClient(app) as client:
+            response = client.post("/decode", content=body, headers={
+                "Content-Type": "application/octet-stream",
+                "X-KidneyQuant-File-Extension": ".tif",
+                "Accept": "application/vnd.kidneyquant.samples+gzip",
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/vnd.kidneyquant.samples+gzip")
+        self.assertEqual(response.headers["x-kidneyquant-processing"], "native-integer-samples")
+        self.assertEqual(response.headers["x-kidneyquant-source-sha256"], hashlib.sha256(body).hexdigest())
+        np.testing.assert_array_equal(np.frombuffer(gzip.decompress(response.content), dtype="<u2"), values.ravel())

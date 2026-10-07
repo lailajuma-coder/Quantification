@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import gzip
 import io
 import json
 import logging
@@ -40,6 +41,8 @@ class DecodedSource:
     selected_axes: tuple[str, ...]
     selection: dict[str, int | str]
     processing: str
+    samples: np.ndarray | None = None
+    channel_mapping: dict[str, Any] | None = None
 
 
 @app.get("/health")
@@ -271,9 +274,32 @@ def jp2_component_precision(path: Path) -> tuple[int, bool, int]:
         return _codestream_component_precision(stream, codestream_start, codestream_end)
 
 
-def decode_source(path: Path, suffix: str) -> DecodedSource:
+def map_nd2_channels(plane: np.ndarray, metadata: Any) -> tuple[np.ndarray, dict[str, Any]]:
+    """Use a complete, unambiguous RGB metadata permutation; never infer antibody colors."""
+    count = plane.shape[-1] if plane.ndim == 3 else 1
+    channels = getattr(metadata, "channels", None) or []
+    names = [str(getattr(getattr(channels[i], "channel", None), "name", ""))[:200]
+             if i < len(channels) else "" for i in range(count)]
+    order = list(range(count))
+    method = "source-order"
+    if count == 3 and len(channels) == 3:
+        destinations = []
+        for item in channels:
+            color = getattr(getattr(item, "channel", None), "color", None)
+            components = [getattr(color, key, 0) for key in ("r", "g", "b")]
+            peak = max(components)
+            destinations.append(components.index(peak) if peak > 0 and components.count(peak) == 1 else -1)
+        if sorted(destinations) == [0, 1, 2]:
+            order = [destinations.index(component) for component in range(3)]
+            plane = np.ascontiguousarray(plane[..., order])
+            method = "nd2-color-metadata"
+    return plane, {"method": method, "sourceIndices": order, "sourceNames": [names[i] for i in order]}
+
+
+def decode_source(path: Path, suffix: str, render_preview: bool = True) -> DecodedSource:
     normalized_suffix = suffix.lower()
     selection: dict[str, int | str] = {}
+    channel_mapping = None
     if normalized_suffix == ".nd2":
         with nd2.ND2File(path) as nd_file:
             lazy = nd_file.to_dask()
@@ -284,6 +310,13 @@ def decode_source(path: Path, suffix: str) -> DecodedSource:
             validate_retained_plane(retained_shape, retained_axes)
             selected = np.asarray(lazy[indexer].compute(scheduler="synchronous"))
             plane, _ = select_first_plane(selected, retained_axes)
+            plane, channel_mapping = map_nd2_channels(plane, nd_file.metadata)
+            channels = getattr(nd_file.metadata, "channels", None) or []
+            volume = getattr(channels[0], "volume", None) if channels else None
+            calibrated = getattr(volume, "axesCalibrated", ())
+            calibration = getattr(volume, "axesCalibration", ())
+            if len(calibrated) >= 2 and all(calibrated[:2]) and len(calibration) >= 2 and all(np.isfinite(v) and v > 0 for v in calibration[:2]):
+                channel_mapping["pixelSizeMicrons"] = [float(v) for v in calibration[:2]]
             significant_bits = int(nd_file.attributes.bitsPerComponentSignificant)
         selected_axes = ("Y", "X") if plane.ndim == 2 else ("Y", "X", next(axis for axis in retained_axes if axis not in {"Y", "X"}))
         source_format = "ND2"
@@ -340,7 +373,9 @@ def decode_source(path: Path, suffix: str) -> DecodedSource:
         raise ValueError(f"Unsupported image suffix: {normalized_suffix}")
 
     selected_shape = tuple(int(value) for value in plane.shape)
-    display = linear_uint8(plane, significant_bits)
+    if not np.issubdtype(plane.dtype, np.unsignedinteger):
+        raise ValueError("Quantitative decoding requires unsigned integer pixels.")
+    display = linear_uint8(plane, significant_bits) if render_preview else np.empty(0, dtype=np.uint8)
     processing = "native-8bit" if significant_bits == 8 else f"linear-{significant_bits}bit-to-8bit"
     return DecodedSource(
         display=display,
@@ -352,12 +387,15 @@ def decode_source(path: Path, suffix: str) -> DecodedSource:
         selected_axes=selected_axes,
         selection=selection,
         processing=processing,
+        samples=plane,
+        channel_mapping=channel_mapping,
     )
 
 
 def metadata_headers(decoded: DecodedSource) -> dict[str, str]:
     channel_count = decoded.selected_shape[-1] if len(decoded.selected_shape) == 3 else 1
     return {
+        **({"X-KidneyQuant-Channel-Mapping": json.dumps(decoded.channel_mapping, separators=(",", ":"), ensure_ascii=True)} if decoded.channel_mapping else {}),
         "X-KidneyQuant-Source-Format": decoded.source_format,
         "X-KidneyQuant-Original-Bit-Depth": str(decoded.significant_bits),
         "X-KidneyQuant-Original-Shape": "x".join(str(value) for value in decoded.original_shape),
@@ -374,8 +412,18 @@ def metadata_headers(decoded: DecodedSource) -> dict[str, str]:
 def decode_png(path: Path, suffix: str) -> tuple[DecodedSource, bytes]:
     decoded = decode_source(path, suffix)
     output = io.BytesIO()
-    Image.fromarray(decoded.display).save(output, format="PNG", optimize=True)
+    Image.fromarray(decoded.display).save(output, format="PNG", optimize=False, compress_level=1)
     return decoded, output.getvalue()
+
+
+def decode_samples(path: Path, suffix: str) -> tuple[DecodedSource, bytes]:
+    decoded = decode_source(path, suffix, render_preview=False)
+    if not 1 <= decoded.significant_bits <= 16 or decoded.samples is None:
+        raise ValueError("Native thresholding supports unsigned images up to 16 bits.")
+    storage_bits = 8 if decoded.significant_bits <= 8 else 16
+    # Explicit little-endian, interleaved Y,X[,C] samples; preserve every intensity.
+    samples = np.asarray(decoded.samples, dtype="u1" if storage_bits == 8 else "<u2")
+    return decoded, gzip.compress(samples.tobytes(order="C"), compresslevel=1, mtime=0)
 
 
 def _request_upload_metadata(request: Request) -> tuple[str, int]:
@@ -436,13 +484,19 @@ async def decode(request: Request) -> Response:
                     detail="The streamed body length does not match Content-Length.",
                 )
 
-            decoded, png_bytes = await run_in_threadpool(decode_png, Path(temporary_path), suffix)
+            native = request.headers.get("Accept") == "application/vnd.kidneyquant.samples+gzip"
+            decoder = decode_samples if native else decode_png
+            decoded, png_bytes = await run_in_threadpool(decoder, Path(temporary_path), suffix)
+            native_headers = {
+                "X-KidneyQuant-Processing": "native-integer-samples",
+            } if native else {}
             return Response(
                 png_bytes,
-                media_type="image/png",
+                media_type="application/vnd.kidneyquant.samples+gzip" if native else "image/png",
                 headers={
                     "Cache-Control": "no-store",
                     **metadata_headers(decoded),
+                    **native_headers,
                     "X-KidneyQuant-Source-SHA256": source_hash.hexdigest(),
                 },
             )

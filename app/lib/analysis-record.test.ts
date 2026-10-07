@@ -64,7 +64,7 @@ test('analysis record preserves source, plane, ROI, settings, algorithms, and me
     },
   });
 
-  assert.equal(record.schemaVersion, '1.0.0-experimental');
+  assert.equal(record.schemaVersion, '1.4.0-experimental');
   assert.equal(record.quantitativeStatus, 'experimental-not-validated');
   assert.deepEqual(record.source.provenance, { kind: 'user-supplied' });
   assert.deepEqual(record.source.planeSelection, image.planeSelection);
@@ -306,4 +306,26 @@ test('CSV contains reproducibility fields and neutralizes LF-prefixed spreadshee
   assert.match(csv, /user-supplied/);
   assert.match(csv, /"'\n=sample-1"/);
   assert.match(csv, /"'\n@plane.nd2"/);
+});
+
+
+test('co-stain assignments and active marker are frozen in the export snapshot', () => {
+  const stainingPanel = {
+    coStained: 'yes' as const, activeId: 'apoj',
+    assignments: [
+      { id: 'apoj', marker: 'ApoJ / Clusterin', channel: 'red' as const, reagent: 'AF2747' },
+      { id: 'dapi', marker: 'DAPI', channel: 'blue' as const, reagent: '' },
+    ],
+  };
+  const record = buildAnalysisRecord({
+    analyzedAt: '', analyst: '', sampleId: 'co-stain', sourceName: '', sourceSize: 0, sourceLastModified: 0,
+    image, result,
+    settings: { stainingPanel, stain: 'ApoJ / Clusterin (IF)', signalChannel: 'red', structure: 'Whole tissue', minThreshold: 0, maxThreshold: 255, removeBackground: false, backgroundTolerance: 18, outsideMode: 'exclude', rois: [] },
+  });
+  stainingPanel.assignments[0].reagent = 'changed after analysis';
+  assert.equal(record.analysis.stainingPanel.assignments[0].reagent, 'AF2747');
+  assert.equal(record.analysis.stainingPanel.activeId, 'apoj');
+  assert.equal(record.analysis.stainingPanel.coStained, 'yes');
+  assert.match(analysisRecordToCsv(record), /Stain_Channel_Assignments/);
+  assert.match(analysisRecordToCsv(record), /AF2747/);
 });
