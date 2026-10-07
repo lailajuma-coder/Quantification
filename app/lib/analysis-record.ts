@@ -1,6 +1,6 @@
-import type { AnalysisResult, DecodedImage, RoiRect } from './image-analysis';
+import type { AnalysisResult, DecodedImage, RoiRect, GlomerulusOutline } from './image-analysis';
 
-export const ANALYSIS_SCHEMA_VERSION = '1.0.0-experimental';
+export const ANALYSIS_SCHEMA_VERSION = '1.1.0-experimental';
 
 export type AnalysisSettingsSnapshot = {
   stain: string;
@@ -12,6 +12,7 @@ export type AnalysisSettingsSnapshot = {
   backgroundTolerance: number;
   outsideMode: 'exclude' | 'report';
   rois: RoiRect[];
+  glomeruli?: GlomerulusOutline[];
 };
 
 type BuildAnalysisRecordInput = {
@@ -45,7 +46,7 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
     excludedPercent: result.excludedPercent,
   };
   const metricDefinitions = {
-    analyzedPixels: 'Pixels inside the whole-image or analyst-defined ROI mask after any enabled background exclusion',
+    analyzedPixels: 'Pixels inside the whole-image or analyst-defined ROI mask after background and applicable glomerular exclusions',
     positivePixels: 'Analyzed pixels with a stain score inside the inclusive minimum and maximum thresholds',
     positivePercent: 'Positive pixels divided by analyzed pixels, multiplied by 100',
     meanScoreAllAnalyzedPixels: 'Arithmetic mean stain score over all analyzed pixels',
@@ -112,6 +113,9 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
       backgroundTolerance: settings.backgroundTolerance,
       outsideMode: settings.removeBackground ? settings.outsideMode : 'exclude',
       rois: settings.rois.map((roi) => ({ ...roi })),
+      glomeruli: (settings.glomeruli ?? []).map(({ points }) => ({ points: points.map(p => ({ ...p })) })),
+      aggregation: 'pooled-pixel-union-per-tile',
+      glomerularHandling: settings.structure === 'Glomeruli' ? 'include-union' : settings.structure === 'Interstitial region' ? 'exclude-union' : 'unused',
     },
     metrics,
     metricDefinitions,
@@ -119,6 +123,7 @@ export function buildAnalysisRecord(input: BuildAnalysisRecordInput) {
       stainScore: 'kidneyquant-rgb-score-v1-experimental',
       background: settings.removeBackground ? 'border-connected-source-rgb-distance-v1' : 'disabled',
       perimeter: '4-neighbor-grid-edge-v1',
+      glomerularMask: 'pixel-center-even-odd-polygon-union-v1',
     },
     calibration: null,
     warnings: [
@@ -185,6 +190,9 @@ export function analysisRecordToCsv(record: AnalysisRecord) {
     ['Background_Tolerance', record.analysis.backgroundTolerance],
     ['Outside_Mode', record.analysis.outsideMode],
     ['ROIs', JSON.stringify(record.analysis.rois)],
+    ['Glomerular_Outlines', JSON.stringify(record.analysis.glomeruli)],
+    ['Aggregation', record.analysis.aggregation],
+    ['Glomerular_Handling', record.analysis.glomerularHandling],
     ['Analyzed_Pixels', record.metrics.analyzedPixels],
     ['Positive_Pixels', record.metrics.positivePixels],
     ['Positive_Percent', record.metrics.positivePercent.toFixed(4)],

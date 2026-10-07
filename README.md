@@ -13,6 +13,7 @@ KidneyQuant is a private, self-hostable kidney tissue stain-analysis workbench. 
 - Stain modes for alpha-SMA IF, vimentin IF, lotus lectin/LTL IF, Sirius Red, PAS, and H&E
 - Configurable fluorescence signal channel and positive-stain thresholds
 - Connected slide-background detection with exclusion or separate reporting
+- Freehand glomerular outlines: pooled pixel-union positive-area percentage per tile for glomerular measurements; the same outlines subtract from both numerator and denominator for interstitial measurements. Overlaps count once, slide background remains excluded when enabled, and outlines/aggregation are recorded in CSV and JSON.
 - Analyst-defined rectangular ROI categories for glomeruli, podocytes, proximal tubules, all tubules, and interstitial tissue; these labels do not perform anatomical segmentation
 - Overlay, original-image, and binary-mask review views
 - Provenance-rich CSV and JSON export with source identity/SHA-256, processing and plane metadata, complete ROI/settings snapshot, threshold-positive fraction, all-analyzed-pixel score statistics, four-neighbor grid perimeter, score sum, background metrics, algorithm identifiers, and warnings
@@ -70,3 +71,7 @@ It is not the required production host. The application and private companion ca
 Structure-specific regions are selected and reviewed by the analyst; they are not produced by a validated automatic histology model. First-plane selection, 8-bit conversion, thresholding, background handling, and ROI measurements are experimental.
 
 Before publication—and before any use beyond exploratory research—validate thresholds, channel assignments, background tolerance, ROI selection, first-plane behavior, 8-bit conversion, and agreement with the lab's Fiji workflow on a blinded test set. Add pixel calibration when physical units such as µm² or µm are required. Do not use KidneyQuant for diagnosis, treatment decisions, or other clinical purposes.
+
+## Glomerular and interstitial workflow
+
+Choose **Glomeruli**, enable **Outline glomeruli**, and drag around each glomerulus. Release to close the outline. Run analysis for one combined result per tile (total positive pixels / total analyzed pixels × 100), rather than a mean of individual glomerular percentages. Switch to **Interstitial region** to reuse those outlines as exclusions. Optional rectangular regions restrict the interstitial area; without rectangles, it uses all tissue outside outlined glomeruli. Review the orange outlines before exporting. Delete or redraw an outline to correct it. Opening another tile clears its outlines; export each finalized tile before moving on.

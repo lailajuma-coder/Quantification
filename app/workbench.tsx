@@ -16,6 +16,8 @@ import {
   type AnalysisResult,
   type DecodedImage,
   type RoiRect,
+  type RoiPoint,
+  type GlomerulusOutline,
 } from './lib/image-analysis';
 import {
   analysisRecordToCsv,
@@ -175,6 +177,10 @@ export default function Workbench({ userName }: { userName: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const roisRef = useRef<RoiRect[]>([]);
+  const glomeruliRef = useRef<GlomerulusOutline[]>([]);
+  const draftOutlineRef = useRef<RoiPoint[] | null>(null);
+  const [glomeruli, setGlomeruli] = useState<GlomerulusOutline[]>([]);
+  const [drawingGlomeruli, setDrawingGlomeruli] = useState(false);
   const draftRoiRef = useRef<RoiRect | null>(null);
   const draftFrameRef = useRef<number | null>(null);
   const openRequestId = useRef(0);
@@ -229,7 +235,7 @@ export default function Workbench({ userName }: { userName: string }) {
   const runAnalysis = useCallback(
     (decoded = image) => {
       if (!decoded) return;
-      if (structure !== 'Whole tissue' && rois.length === 0) {
+      if (!['Whole tissue', 'Interstitial region', 'Glomeruli'].includes(structure) && rois.length === 0) {
         setResult(null);
         setAnalysisRecord(null);
         setError('No analyzable ROI is defined. Add at least one region, then rerun analysis.');
@@ -245,6 +251,7 @@ export default function Workbench({ userName }: { userName: string }) {
         outsideMode,
         structure,
         rois: rois.map((roi) => ({ ...roi })),
+        glomeruli: glomeruli.map(({ points }) => ({ points: points.map(p => ({ ...p })) })),
       };
       const provenance = {
         analyst: userName,
@@ -295,7 +302,7 @@ export default function Workbench({ userName }: { userName: string }) {
     },
     [
       image, stain, signalChannel, minThreshold, maxThreshold, removeBackground, backgroundTolerance,
-      outsideMode, structure, rois, userName, sampleId, sourceName, sourceSize, sourceLastModified,
+      outsideMode, structure, rois, glomeruli, userName, sampleId, sourceName, sourceSize, sourceLastModified,
     ],
   );
 
@@ -307,6 +314,11 @@ export default function Workbench({ userName }: { userName: string }) {
     setResult(null);
     setAnalysisRecord(null);
     setImage(null);
+    setGlomeruli([]);
+    glomeruliRef.current = [];
+    draftOutlineRef.current = null;
+    draftRoiRef.current = null;
+    setDrawingGlomeruli(false);
     setDisplayChannel('composite');
     setSourceName(displayName);
     setSourceSize(file.size);
@@ -368,6 +380,23 @@ export default function Workbench({ userName }: { userName: string }) {
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(baseCanvas, 0, 0);
     drawRoiOverlay(context, canvas.width, roisRef.current, draftRoi);
+    context.save();
+    context.strokeStyle = '#ffbf69';
+    context.fillStyle = 'rgba(255, 191, 105, .15)';
+    context.lineWidth = Math.max(2, canvas.width / 700);
+    const outlines = [...glomeruliRef.current, ...(draftOutlineRef.current ? [{ points: draftOutlineRef.current }] : [])];
+    outlines.forEach(({ points }, index) => {
+      if (!points.length) return;
+      context.beginPath();
+      context.moveTo(points[0].x, points[0].y);
+      points.slice(1).forEach(p => context.lineTo(p.x, p.y));
+      context.closePath();
+      context.fill('evenodd');
+      context.stroke();
+      context.font = `700 ${Math.max(12, canvas.width / 85)}px Arial`;
+      context.fillText(`G${index + 1}`, points[0].x, points[0].y);
+    });
+    context.restore();
   }, []);
 
   useEffect(() => {
@@ -478,7 +507,19 @@ export default function Workbench({ userName }: { userName: string }) {
     };
   };
 
+  useEffect(() => {
+    glomeruliRef.current = glomeruli;
+    paintCanvas();
+  }, [glomeruli, paintCanvas]);
+
   const onPointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (drawingGlomeruli && image) {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      draftOutlineRef.current = [pointInImage(event)];
+      paintCanvas();
+      return;
+    }
     if (!drawing || !image) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -488,6 +529,12 @@ export default function Workbench({ userName }: { userName: string }) {
   };
 
   const onPointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (drawingGlomeruli && draftOutlineRef.current) {
+      const point = pointInImage(event);
+      draftOutlineRef.current.push(point);
+      paintCanvas();
+      return;
+    }
     const draftRoi = draftRoiRef.current;
     if (!drawing || !draftRoi) return;
     const point = pointInImage(event);
@@ -501,6 +548,22 @@ export default function Workbench({ userName }: { userName: string }) {
   };
 
   const onPointerUp = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (drawingGlomeruli && draftOutlineRef.current) {
+      const points = [...draftOutlineRef.current, pointInImage(event)];
+      draftOutlineRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      const area = Math.abs(points.reduce((sum, p, i) => {
+        const q = points[(i + 1) % points.length];
+        return sum + p.x * q.y - q.x * p.y;
+      }, 0)) / 2;
+      if (points.length >= 3 && area > 1) {
+        glomeruliRef.current = [...glomeruliRef.current, { points }];
+        setGlomeruli(glomeruliRef.current);
+        invalidateAnalysis();
+      }
+      paintCanvas();
+      return;
+    }
     const draftRoi = draftRoiRef.current;
     if (!drawing || !draftRoi) return;
     const point = pointInImage(event);
@@ -527,6 +590,7 @@ export default function Workbench({ userName }: { userName: string }) {
   };
 
   const onPointerCancel = () => {
+    draftOutlineRef.current = null;
     draftRoiRef.current = null;
     if (draftFrameRef.current !== null) {
       window.cancelAnimationFrame(draftFrameRef.current);
@@ -585,7 +649,8 @@ export default function Workbench({ userName }: { userName: string }) {
     onPointerCancel();
     setStructure(value);
     setRois([]);
-    setDrawing(value !== 'Whole tissue');
+    setDrawing(!['Whole tissue', 'Glomeruli'].includes(value));
+    setDrawingGlomeruli(value === 'Glomeruli');
     invalidateAnalysis();
   };
 
@@ -595,6 +660,7 @@ export default function Workbench({ userName }: { userName: string }) {
 
   const toggleDrawing = () => {
     if (drawing) onPointerCancel();
+    setDrawingGlomeruli(false);
     setDrawing(!drawing);
   };
 
@@ -653,7 +719,7 @@ export default function Workbench({ userName }: { userName: string }) {
           <select id="roi-category" className="select-input" value={structure} onChange={(event) => chooseStructure(event.target.value)}>{STRUCTURE_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select>
           <p className="validation-note">ROI categories label analyst-defined regions; they do not segment or identify anatomy.</p>
 
-          {structure !== 'Whole tissue' && <>
+          {structure !== 'Whole tissue' && structure !== 'Glomeruli' && <>
             <div className="roi-controls">
               <button type="button" disabled={!image} onClick={addCentralRoi}>Add region</button>
               <button type="button" className={drawing ? 'active' : ''} disabled={!image} aria-pressed={drawing} onClick={toggleDrawing}>{drawing ? 'Drawing regions' : 'Draw regions'}</button>
@@ -676,6 +742,16 @@ export default function Workbench({ userName }: { userName: string }) {
                 <button className="roi-delete" type="button" aria-label={`Delete region ${index + 1}`} onClick={() => deleteRoi(index)}>Delete</button>
               </div>)}
             </div>}
+          </>}
+
+          {['Glomeruli', 'Interstitial region'].includes(structure) && <>
+            <p className="validation-note">{structure === 'Glomeruli' ? 'One pooled positive-area result per tile across all outlined glomeruli. Overlaps count once.' : 'Outlined glomeruli are excluded from positive and analyzed area. With no rectangular regions, measure the whole tissue outside glomeruli.'}</p>
+            <div className="roi-controls">
+              <button type="button" disabled={!image} aria-pressed={drawingGlomeruli} className={drawingGlomeruli ? 'active' : ''} onClick={() => { onPointerCancel(); setDrawing(false); setDrawingGlomeruli(!drawingGlomeruli); }}>{drawingGlomeruli ? 'Stop outlining' : 'Outline glomeruli'}</button>
+              <button type="button" disabled={!glomeruli.length} onClick={() => { onPointerCancel(); setGlomeruli([]); invalidateAnalysis(); }}>Clear glomeruli ({glomeruli.length})</button>
+            </div>
+            <p className="validation-note">Drag around each glomerulus, then release to close its outline. Outlines are kept when switching measurement categories within this tile.</p>
+            {glomeruli.map((_, index) => <div key={index} className="roi-row"><strong>G{index + 1}</strong><button type="button" onClick={() => { setGlomeruli(current => current.filter((_, i) => i !== index)); invalidateAnalysis(); }}>Delete outline</button></div>)}
           </>}
 
           <div className="switch-row"><div><strong>Remove slide background</strong><span>Border-connected source-RGB distance mask</span></div><button type="button" className={`toggle ${removeBackground ? 'active' : ''}`} aria-label="Remove slide background" aria-pressed={removeBackground} onClick={() => { setRemoveBackground((current) => !current); invalidateAnalysis(); }}><i /></button></div>
@@ -701,13 +777,13 @@ export default function Workbench({ userName }: { userName: string }) {
 
           {image && <div className="channel-bar" aria-label="Image display channels"><b aria-hidden="true">C</b>{displayChannels.map((channel) => <button key={channel} type="button" disabled={loading} aria-label={`${channel} channel view`} aria-pressed={displayChannel === channel} className={displayChannel === channel ? 'active' : ''} onClick={() => chooseDisplayChannel(channel)}>{channel === 'composite' ? 'Composite' : channel[0].toUpperCase()}</button>)}{channelMappingDisclosure && <span className="channel-mapping">{channelMappingDisclosure}</span>}</div>}
 
-          <div className={`image-canvas ${draggingFile ? 'dragging' : ''} ${drawing ? 'drawing' : ''}`} onDragEnter={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDraggingFile(false)} onDrop={onDrop}>
+          <div className={`image-canvas ${draggingFile ? 'dragging' : ''} ${drawing || drawingGlomeruli ? 'drawing' : ''}`} onDragEnter={(event) => { event.preventDefault(); setDraggingFile(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDraggingFile(false)} onDrop={onDrop}>
             {image && <canvas ref={canvasRef} aria-label="Microscopy image analysis preview" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} />}
             {!image && <div className="empty-canvas"><strong>No image open</strong><span>Choose a TIFF, JP2, ND2 file, or folder.</span></div>}
             {(draggingFile || !image) && <button type="button" className="central-dropzone" disabled={loading} onClick={() => fileInput.current?.click()}><strong>Drop ND2, TIFF, or JP2</strong><span>or choose a file</span></button>}
             {image && <button type="button" className="dropzone" onClick={() => fileInput.current?.click()}><strong>Drop ND2, TIFF, or JP2</strong><span>or choose a file</span></button>}
-            {drawing && <div className="drawing-hint">Drag on the image to add a region</div>}
-            <div className="legend"><span><i className="positive" /> Positive stain</span><span><i className="structure" /> Selected region</span><span><i className="excluded" /> Excluded</span></div>
+            {(drawing || drawingGlomeruli) && <div className="drawing-hint">{drawingGlomeruli ? 'Drag around a glomerulus; release to close' : 'Drag on the image to add a region'}</div>}
+            <div className="legend"><span><i className="positive" /> Positive stain</span><span><i className="structure" /> Selected region</span><span><i style={{ background: '#ffbf69' }} /> Glomerular outlines</span><span><i className="excluded" /> Excluded</span></div>
           </div>
 
           <div className={`analysis-message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}><i>{error ? '!' : loading ? '…' : analysisRecord ? '✓' : 'i'}</i><span>{error || message}</span></div>
@@ -732,7 +808,7 @@ export default function Workbench({ userName }: { userName: string }) {
 
         <aside className="results-panel">
           <div className="panel-title"><span>02</span><div><h2>Review result</h2><p>{analysisRecord ? 'Finalized measurement snapshot' : 'Awaiting analysis'}</p></div></div>
-          <div className="primary-metric"><span>Threshold-positive fraction</span><strong>{metrics ? formatDecimal(metrics.positivePercent) : '—'}{metrics && <small>%</small>}</strong><p>of all analyzed pixels in the selected ROI category</p></div>
+          <div className="primary-metric"><span>Threshold-positive fraction</span><strong>{metrics ? formatDecimal(metrics.positivePercent) : '—'}{metrics && <small>%</small>}</strong><p>{structure === 'Glomeruli' ? 'of pooled analyzed pixels across all outlined glomeruli in this tile' : structure === 'Interstitial region' ? 'of analyzed tissue pixels outside outlined glomeruli' : 'of all analyzed pixels in the selected ROI category'}</p></div>
           <div className="sample-summary"><span>Sample ID</span><strong>{analysisRecord?.sampleId || sampleId || 'Required'}</strong></div>
           <dl className="metric-list">
             <div><dt>Analyzed area (ROI/tissue mask)</dt><dd>{metrics ? `${formatInteger(metrics.analyzedPixels)} px²` : '—'}</dd></div>

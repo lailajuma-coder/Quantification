@@ -20,6 +20,9 @@ export type DecodedImage = {
 
 export type RoiRect = { x: number; y: number; width: number; height: number };
 
+export type RoiPoint = { x: number; y: number };
+export type GlomerulusOutline = { points: RoiPoint[] };
+
 export type AnalysisOptions = {
   stain: string;
   signalChannel: 'red' | 'green' | 'blue' | 'grayscale';
@@ -30,6 +33,7 @@ export type AnalysisOptions = {
   outsideMode: 'exclude' | 'report';
   structure: string;
   rois: RoiRect[];
+  glomeruli?: GlomerulusOutline[];
 };
 
 export type AnalysisResult = {
@@ -297,10 +301,17 @@ export function analyzeImage(image: DecodedImage, options: AnalysisOptions): Ana
   const tissueMask = new Uint8Array(length);
   const regionMask = new Uint8Array(length);
   const roiMask = makeRoiMask(width, height, options.rois);
-  const useWholeTissue = options.structure === 'Whole tissue';
+  const glomerularMask = makeGlomerularMask(width, height, options.glomeruli ?? []);
+  const isGlomerular = options.structure === 'Glomeruli';
+  const isInterstitial = options.structure === 'Interstitial region';
+  if (isGlomerular && !(options.glomeruli?.length)) {
+    throw new Error('Outline at least one glomerulus before measuring glomerular area.');
+  }
+  const useWholeTissue = options.structure === 'Whole tissue' || (isInterstitial && options.rois.length === 0);
   for (let i = 0; i < length; i++) {
     tissueMask[i] = backgroundMask[i] ? 0 : 1;
-    regionMask[i] = tissueMask[i] && (useWholeTissue || roiMask[i]) ? 1 : 0;
+    const selected = isGlomerular ? glomerularMask[i] : (useWholeTissue || roiMask[i]);
+    regionMask[i] = tissueMask[i] && selected && !(isInterstitial && glomerularMask[i]) ? 1 : 0;
   }
 
   const positiveMask = new Uint8Array(length);
@@ -500,4 +511,35 @@ function maskPerimeter(mask: Uint8Array, width: number, height: number) {
     }
   }
   return perimeter;
+}
+
+// Scanline fill at pixel centers. OR into a shared mask so overlapping outlines
+// contribute only once to the pooled tile numerator and denominator.
+export function makeGlomerularMask(width: number, height: number, outlines: GlomerulusOutline[]) {
+  const mask = new Uint8Array(width * height);
+  for (const { points } of outlines) {
+    if (points.length < 3 || points.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y))) {
+      throw new Error('Each glomerular outline needs at least three finite points.');
+    }
+    const bounds = points.reduce((bounds, p) => ({ minY: Math.min(bounds.minY, p.y), maxY: Math.max(bounds.maxY, p.y) }), { minY: Infinity, maxY: -Infinity });
+    const startY = Math.max(0, Math.ceil(bounds.minY - 0.5));
+    const endY = Math.min(height, Math.ceil(bounds.maxY - 0.5));
+    for (let y = startY; y < endY; y++) {
+      const scanY = y + 0.5;
+      const crossings: number[] = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i], b = points[(i + 1) % points.length];
+        if ((a.y > scanY) !== (b.y > scanY)) {
+          crossings.push(a.x + (scanY - a.y) * (b.x - a.x) / (b.y - a.y));
+        }
+      }
+      crossings.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < crossings.length; i += 2) {
+        const left = Math.max(0, Math.min(width, Math.ceil(crossings[i] - 0.5)));
+        const right = Math.max(0, Math.min(width, Math.ceil(crossings[i + 1] - 0.5)));
+        mask.fill(1, y * width + left, y * width + right);
+      }
+    }
+  }
+  return mask;
 }

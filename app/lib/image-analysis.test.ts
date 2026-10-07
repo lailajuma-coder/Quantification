@@ -104,7 +104,7 @@ test('analysis rejects an empty ROI instead of reporting a valid zero percent', 
   ]);
 
   assert.throws(
-    () => analyzeImage(decoded, { ...options, structure: 'Glomeruli', rois: [{ x: 10, y: 10, width: 5, height: 5 }] }),
+    () => analyzeImage(decoded, { ...options, structure: 'Podocytes', rois: [{ x: 10, y: 10, width: 5, height: 5 }] }),
     /No analyzable pixels remain/,
   );
 });
@@ -140,4 +140,40 @@ test('small but connected slide background is retained instead of silently disca
 
   assert.equal(result.backgroundPixels, 2 * width + 2 * height - 4);
   assert.ok(result.excludedPercent > 0 && result.excludedPercent < 0.2);
+});
+
+function box(x: number, y: number, width: number, height: number) {
+  return { points: [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }] };
+}
+
+test('glomeruli pool pixel areas rather than averaging percentages and overlaps count once', () => {
+  const decoded = image(4, 1, [200,0,0,255, 0,0,0,255, 0,0,0,255, 0,0,0,255]);
+  const result = analyzeImage(decoded, { ...options, structure: 'Glomeruli', glomeruli: [box(0,0,1,1), box(1,0,3,1), box(0,0,1,1)] });
+  assert.equal(result.analyzedPixels, 4);
+  assert.equal(result.positivePixels, 1);
+  assert.equal(result.positivePercent, 25);
+});
+
+test('interstitial measurement subtracts glomeruli from both numerator and denominator', () => {
+  const decoded = image(4, 1, [200,0,0,255, 200,0,0,255, 0,0,0,255, 0,0,0,255]);
+  const settings = { ...options, structure: 'Interstitial region', glomeruli: [box(0,0,1,1)] };
+  const result = analyzeImage(decoded, settings);
+  assert.equal(result.analyzedPixels, 3);
+  assert.equal(result.positivePixels, 1);
+  assert.ok(Math.abs(result.positivePercent - 100 / 3) < 1e-10);
+  const restricted = analyzeImage(decoded, { ...settings, rois: [{ x:0,y:0,width:2,height:1 }] });
+  assert.equal(restricted.analyzedPixels, 1);
+  assert.equal(restricted.positivePercent, 100);
+  assert.throws(() => analyzeImage(decoded, { ...settings, glomeruli: [box(0,0,4,1)] }), /No analyzable pixels/);
+});
+
+test('polygon rasterization uses actual outline and combines it with tissue background', () => {
+  const decoded = image(2, 2, [255,255,255,255, 200,0,0,255, 200,0,0,255, 200,0,0,255]);
+  const result = analyzeImage(decoded, { ...options, structure: 'Glomeruli', removeBackground:true, glomeruli: [box(-1,-1,4,4)] });
+  assert.equal(result.analyzedPixels, 4 - result.backgroundPixels);
+  assert.ok(result.backgroundPixels > 0);
+  const triangle = analyzeImage(decoded, { ...options, structure: 'Glomeruli', glomeruli: [{ points:[{x:0,y:0},{x:2,y:0},{x:0,y:2}] }] });
+  assert.equal(triangle.analyzedPixels, 1);
+  assert.throws(() => analyzeImage(decoded, { ...options, structure:'Glomeruli' }), /Outline at least/);
+  assert.throws(() => analyzeImage(decoded, { ...options, structure:'Glomeruli', glomeruli:[{points:[{x:NaN,y:0}]}] }), /finite points/);
 });
