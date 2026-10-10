@@ -104,7 +104,7 @@ test('analysis rejects an empty ROI instead of reporting a valid zero percent', 
   ]);
 
   assert.throws(
-    () => analyzeImage(decoded, { ...options, structure: 'Glomeruli', rois: [{ x: 10, y: 10, width: 5, height: 5 }] }),
+    () => analyzeImage(decoded, { ...options, structure: 'Podocytes', rois: [{ x: 10, y: 10, width: 5, height: 5 }] }),
     /No analyzable pixels remain/,
   );
 });

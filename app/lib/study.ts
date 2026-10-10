@@ -1,7 +1,7 @@
 import type { AnalysisRecord } from './analysis-record';
 import type { RoiRect } from './image-analysis';
 import type { ChannelSettings } from './channel-preview';
-export type ReferenceTile = { id:string; name:string; sampleId?:string; groupName?:string; stain?:string; sourceId?:string; settings:Record<string,ChannelSettings>; conversion:unknown; rois?:RoiRect[]; regionCategory?:string };
+export type ReferenceTile = { id:string; name:string; sampleId?:string; groupName?:string; stain?:string; sourceId?:string; settings:Record<string,ChannelSettings>; conversion:unknown; rois?:RoiRect[]; glomeruli?:RoiRect[]; regionCategory?:string };
 export type StudyTile = { id:string; name:string; records:AnalysisRecord[]; screenshots:Record<string,string>; displaySettings?:Record<string,ChannelSettings>; reference:boolean };
 export function averageThresholds(references:ReferenceTile[], fractional=false) {
  if (!references.length) throw new Error('Save at least one reference tile first.');

@@ -14,7 +14,7 @@ test('reference means keep maxima fixed, reject channel mismatches, round only a
 test('freehand ROI uses polygon interior rather than bounding rectangle and overlaps count once',()=>{
  const image={...source,width:4,height:4,samples:new Uint8Array(16).fill(100),rgba:new Uint8ClampedArray(64),analysisBitDepth:8};
  const roi={x:0,y:0,width:4,height:4,points:[{x:0,y:0},{x:4,y:0},{x:0,y:4}]};
- const result=analyzeImage(image,{...options,structure:'Glomeruli',rois:[roi,roi]});assert.equal(result.analyzedPixels,6);assert.equal(result.positivePercent,100);
+ const result=analyzeImage(image,{...options,structure:'Glomeruli',glomeruli:[roi,roi]});assert.equal(result.analyzedPixels,6);assert.equal(result.positivePercent,100);
  const crop=analyzeImage(image,{...options,rois:[{x:0,y:0,width:2,height:2}]});assert.equal(crop.analyzedPixels,4);
 });
 test('Sirius Red uses fractional CMYK magenta and threshold-limited intensity',()=>{

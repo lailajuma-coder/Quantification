@@ -37,6 +37,7 @@ export type AnalysisOptions = {
   outsideMode: 'exclude' | 'report';
   structure: string;
   rois: RoiRect[];
+  glomeruli?: RoiRect[];
 };
 
 export type AnalysisResult = {
@@ -336,10 +337,16 @@ export function analyzeImage(image: DecodedImage, options: AnalysisOptions): Ana
   const tissueMask = new Uint8Array(length);
   const regionMask = new Uint8Array(length);
   const roiMask = makeRoiMask(width, height, options.rois);
-  const useWholeTissue = options.structure === 'Whole tissue' && options.rois.length === 0;
+  const glomerular = options.structure === 'Glomeruli';
+  const interstitial = options.structure === 'Interstitial region';
+  const glomeruli = options.glomeruli ?? [];
+  if (glomerular && !glomeruli.length) throw new Error('Outline at least one glomerulus before analysis.');
+  const glomerularMask = makeRoiMask(width, height, glomeruli);
+  const useWholeTissue = (options.structure === 'Whole tissue' || interstitial) && options.rois.length === 0;
   for (let i = 0; i < length; i++) {
     tissueMask[i] = backgroundMask[i] ? 0 : 1;
-    regionMask[i] = tissueMask[i] && (useWholeTissue || roiMask[i]) ? 1 : 0;
+    const selected = glomerular ? glomerularMask[i] : (useWholeTissue || roiMask[i]);
+    regionMask[i] = tissueMask[i] && selected && !(interstitial && glomerularMask[i]) ? 1 : 0;
   }
 
   const positiveMask = new Uint8Array(length);

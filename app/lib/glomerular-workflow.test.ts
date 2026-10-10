@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import ExcelJS from 'exceljs';
+import { analyzeImage, type DecodedImage, type RoiRect } from './image-analysis.ts';
+import { analyzeChannels } from './channel-analysis.ts';
+import { analysisRecordToCsv, type AnalysisSettingsSnapshot } from './analysis-record.ts';
+import { channelWorkbook } from './workbook-export.ts';
+const image:DecodedImage={width:4,height:1,channelCount:3,bitDepth:8,analysisBitDepth:8,samples:new Uint8Array([200,0,0,0,200,0,0,200,0,0,0,200]),rgba:new Uint8ClampedArray(16),sourceFormat:'test',originalShape:'1x4x3',originalAxes:['Y','X','C'],selectedShape:'1x4x3',selectedAxes:['Y','X','C'],planeSelection:{},processing:'native',processingLocation:'browser',quantitativeStatus:'experimental',sourceSha256:'test'};
+const box=(x:number,width:number):RoiRect=>({x,y:0,width,height:1,points:[{x,y:0},{x:x+width,y:0},{x:x+width,y:1},{x,y:1}]});
+const settings:AnalysisSettingsSnapshot={stain:'Channel intensity (IF)',signalChannel:'red',minThreshold:100,maxThreshold:255,removeBackground:false,backgroundTolerance:18,outsideMode:'exclude',structure:'Glomeruli',rois:[],glomeruli:[box(0,1),box(1,3),box(0,1)]};
+const saved=Object.fromEntries(['red','green','blue'].map(c=>['fluorescence:'+c,{minimum:100,maximum:255,brightness:1}]));
+const provenance={analyst:'test',sampleId:'sample',groupName:'group',sourceName:'tile.tif',sourceSize:0,sourceLastModified:0};
+test('unequal outlines pool pixels, not percentages, once per channel; overlaps count once',()=>{
+ const records=analyzeChannels(image,settings,saved,provenance);
+ assert.equal(records.length,3);
+ assert.deepEqual(records.map(r=>r.metrics.analyzedPixels),[4,4,4]);
+ assert.deepEqual(records.map(r=>r.metrics.positivePercent),[25,50,25]);
+ assert.equal(records[0].analysis.glomerularHandling,'include-union');
+});
+test('interstitial exclusions subtract both areas and respect tissue regions',()=>{
+ const options={...settings,structure:'Interstitial region',glomeruli:[box(0,1)]};
+ const r=analyzeImage(image,options);assert.equal(r.analyzedPixels,3);assert.equal(r.positivePixels,0);
+ const green=analyzeImage(image,{...options,signalChannel:'green'});assert.equal(green.positivePixels,2);assert.ok(Math.abs(green.positivePercent-200/3)<1e-10);
+ assert.equal(analyzeImage(image,{...options,rois:[box(0,2)]}).analyzedPixels,1);
+ assert.throws(()=>analyzeImage(image,{...options,glomeruli:[box(0,4)]}),/No analyzable pixels/);
+ assert.throws(()=>analyzeImage(image,{...settings,glomeruli:[]}),/Outline at least/);
+ assert.equal(analyzeImage(image,{...options,glomeruli:[]}).analyzedPixels,4);
+});
+test('exports snapshot outlines and retain tile values in Excel and GraphPad layouts',async()=>{
+ const input=structuredClone(settings);
+ const records=analyzeChannels(image,input,saved,provenance);
+ input.glomeruli![0].points![0].x=900;
+ assert.equal(records[0].analysis.glomeruli[0].points![0].x,0);
+ assert.equal(JSON.parse(JSON.stringify(records[0])).analysis.aggregation,'pooled-pixel-union-per-tile');
+ assert.match(analysisRecordToCsv(records[0]),/Glomerular_Outlines/);
+ const bytes=await channelWorkbook(records);
+ const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(bytes as never);
+ assert.equal(workbook.getWorksheet('Glomerular outlines')!.rowCount,37);
+ assert.equal(workbook.getWorksheet('Tile values')!.getCell(2,7).value,25);
+ assert.equal(workbook.getWorksheet('GraphPad tiles 1')!.getCell(5,1).value,25);
+ assert.ok(workbook.getWorksheet('Provenance')!.getColumn(2).values.includes('analysis.glomerularHandling'));
+});

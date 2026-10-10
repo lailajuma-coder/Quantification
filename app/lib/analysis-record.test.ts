@@ -64,7 +64,7 @@ test('analysis record preserves source, plane, ROI, settings, algorithms, and me
     },
   });
 
-  assert.equal(record.schemaVersion, '1.4.0-experimental');
+  assert.equal(record.schemaVersion, '1.5.0-experimental');
   assert.equal(record.quantitativeStatus, 'experimental-not-validated');
   assert.deepEqual(record.source.provenance, { kind: 'user-supplied' });
   assert.deepEqual(record.source.planeSelection, image.planeSelection);

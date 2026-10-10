@@ -128,10 +128,11 @@ function drawRoiOverlay(
   imageWidth: number,
   rois: RoiRect[],
   draftRoi: RoiRect | null,
+  glomerular = false,
 ) {
   const visibleRois = draftRoi ? [...rois, draftRoi] : rois;
   context.save();
-  context.strokeStyle = '#69a7ff';
+  context.strokeStyle = glomerular ? '#ffbf69' : '#69a7ff';
   context.fillStyle = 'rgba(76, 139, 234, .12)';
   context.lineWidth = Math.max(2, imageWidth / 700);
   context.setLineDash([Math.max(5, imageWidth / 180), Math.max(4, imageWidth / 260)]);
@@ -140,8 +141,8 @@ function drawRoiOverlay(
     else {context.fillRect(roi.x, roi.y, roi.width, roi.height);context.strokeRect(roi.x, roi.y, roi.width, roi.height);}
     context.setLineDash([]);
     context.font = `700 ${Math.max(12, imageWidth / 85)}px Arial`;
-    context.fillStyle = '#ddebff';
-    context.fillText(`R${index + 1}`, roi.x + 6, Math.max(18, roi.y + 20));
+    context.fillStyle = glomerular ? '#ffbf69' : '#ddebff';
+    context.fillText(`${glomerular ? 'G' : 'R'}${index + 1}`, roi.x + 6, Math.max(18, roi.y + 20));
     context.fillStyle = 'rgba(76, 139, 234, .12)';
     context.setLineDash([Math.max(5, imageWidth / 180), Math.max(4, imageWidth / 260)]);
   });
@@ -154,6 +155,10 @@ export default function Workbench({ userName }: { userName: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const roisRef = useRef<RoiRect[]>([]);
+  const glomeruliRef = useRef<RoiRect[]>([]);
+  const drawingTargetRef = useRef('region');
+  const [glomeruli, setGlomeruli] = useState<RoiRect[]>([]);
+  const [drawingTarget, setDrawingTarget] = useState('region');
   const draftRoiRef = useRef<RoiRect | null>(null);
   const draftFrameRef = useRef<number | null>(null);
   const openRequestId = useRef(0);
@@ -237,6 +242,11 @@ export default function Workbench({ userName }: { userName: string }) {
     return () => cancelAnimationFrame(frame);
   }, [previewImage, stain, signalChannel, suggestions, channelSettings]);
 
+  const previewGlomeruli=useMemo(()=>glomeruli.map(roi=>({
+    ...roi, x:roi.x*(previewImage?.width??1)/(image?.width??1), y:roi.y*(previewImage?.height??1)/(image?.height??1),
+    width:roi.width*(previewImage?.width??1)/(image?.width??1), height:roi.height*(previewImage?.height??1)/(image?.height??1),
+    points:roi.points?.map(p=>({x:p.x*(previewImage?.width??1)/(image?.width??1),y:p.y*(previewImage?.height??1)/(image?.height??1)})),
+  })),[glomeruli,previewImage,image]);
   const previewRois=useMemo(()=>rois.map(roi=>({
     points:roi.points?.map(p=>({x:p.x*(previewImage?.width??1)/(image?.width??1),y:p.y*(previewImage?.height??1)/(image?.height??1)})),
     x:roi.x*(previewImage?.width??1)/(image?.width??1),y:roi.y*(previewImage?.height??1)/(image?.height??1),
@@ -244,8 +254,8 @@ export default function Workbench({ userName }: { userName: string }) {
   })),[rois,previewImage,image]);
   const previewOptions = useMemo(() => ({
     stain:scoreStain, signalChannel, minThreshold, maxThreshold, removeBackground, backgroundTolerance,
-    outsideMode, structure, rois:previewRois,
-  }), [scoreStain, signalChannel, minThreshold, maxThreshold, removeBackground, backgroundTolerance, outsideMode, structure, previewRois]);
+    outsideMode, structure, rois:previewRois, glomeruli:previewGlomeruli,
+  }), [scoreStain, signalChannel, minThreshold, maxThreshold, removeBackground, backgroundTolerance, outsideMode, structure, previewRois, previewGlomeruli]);
   const previewBrightness = useMemo(() => image?.channelCount === 1 || signalChannel === 'grayscale' ? [brightness, brightness, brightness]
     : (['red', 'green', 'blue'] as const).map((channel) => channel === signalChannel ? brightness : channelSettings[channelSettingsKey(stain, channel)]?.brightness ?? 1),
   [image, brightness, signalChannel, channelSettings, stain]);
@@ -291,7 +301,7 @@ export default function Workbench({ userName }: { userName: string }) {
         setError('Choose a stain name and an available image channel before analysis.');
         return;
       }
-      if (structure !== 'Whole tissue' && rois.length === 0) {
+      if (!['Whole tissue', 'Glomeruli', 'Interstitial region'].includes(structure) && rois.length === 0) {
         setAnalysisRecord(null); setChannelRecords([]);
         setError('No analyzable ROI is defined. Add at least one region, then rerun analysis.');
         return;
@@ -306,7 +316,8 @@ export default function Workbench({ userName }: { userName: string }) {
         backgroundTolerance,
         outsideMode,
         structure,
-        rois: rois.map((roi) => ({ ...roi })),
+        rois: structuredClone(rois),
+        glomeruli: structuredClone(glomeruli),
       };
       const provenance = {
         analyst: userName,
@@ -353,7 +364,7 @@ export default function Workbench({ userName }: { userName: string }) {
     },
     [
       image, stain, stainingPanel, signalChannel, minThreshold, maxThreshold, removeBackground, backgroundTolerance,
-      outsideMode, structure, rois, userName, sampleId, sourceName, sourceSize, sourceLastModified, channelSettings, studySample, references, groupName, effectiveScope,
+      outsideMode, structure, rois, glomeruli, userName, sampleId, sourceName, sourceSize, sourceLastModified, channelSettings, studySample, references, groupName, effectiveScope,
     ],
   );
 
@@ -391,6 +402,9 @@ export default function Workbench({ userName }: { userName: string }) {
       });
       if (!demonstration) setSampleId(stripExtension(displayName).replaceAll('/', ' · '));
       setRois([]);
+      setGlomeruli([]);
+      glomeruliRef.current=[];
+      draftRoiRef.current=null;
       if (demonstration) {
         setMessage(`Bundled ${SYNTHETIC_DEMO_NAME} ready — procedurally generated synthetic data; no specimen or acquisition. Demonstration only; not validated for quantitative use.`);
       } else {
@@ -439,7 +453,8 @@ export default function Workbench({ userName }: { userName: string }) {
     if (image) {
       context.save();
       context.scale(canvas.width / image.width, canvas.height / image.height);
-      drawRoiOverlay(context, image.width, roisRef.current, draftRoi);
+      drawRoiOverlay(context, image.width, roisRef.current, drawingTargetRef.current === 'region' ? draftRoi : null);
+      drawRoiOverlay(context, image.width, glomeruliRef.current, drawingTargetRef.current === 'glomeruli' ? draftRoi : null, true);
       context.restore();
     }
   }, [image]);
@@ -518,13 +533,19 @@ export default function Workbench({ userName }: { userName: string }) {
     return {x:Math.max(0,Math.min(1,x))*image.width,y:Math.max(0,Math.min(1,y))*image.height,inside:x>=0&&x<=1&&y>=0&&y<=1};
   };
 
+  useEffect(() => {
+    glomeruliRef.current = glomeruli;
+    drawingTargetRef.current = drawingTarget;
+    paintCanvas();
+  }, [glomeruli, drawingTarget, paintCanvas]);
+
   const onPointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
     if (!drawing || !image) return;
     const point = pointInImage(event);
     if(!point.inside)return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    draftRoiRef.current = { x: point.x, y: point.y, width: 0, height: 0, ...(drawShape==='freehand'?{points:[point]}:{}) };
+    draftRoiRef.current = { x: point.x, y: point.y, width: 0, height: 0, ...((drawingTarget==='glomeruli'||drawShape==='freehand')?{points:[point]}:{}) };
     paintCanvas();
   };
 
@@ -563,7 +584,8 @@ export default function Workbench({ userName }: { userName: string }) {
       draftFrameRef.current = null;
     }
     if (normalized.width > 5 && normalized.height > 5) {
-      setRois(current=>[...current,structuredClone(normalized)]);
+      if(drawingTarget==='glomeruli') setGlomeruli(current=>[...current,structuredClone(normalized)]);
+      else setRois(current=>[...current,structuredClone(normalized)]);
       invalidateAnalysis();
     }
     paintCanvas(null);
@@ -640,7 +662,7 @@ export default function Workbench({ userName }: { userName: string }) {
   const chooseStructure = (value: string) => {
     onPointerCancel();
     setStructure(value);
-    setRois([]);
+    setDrawingTarget(['Glomeruli','Interstitial region'].includes(value) ? 'glomeruli' : 'region');
     setDrawing(value !== 'Whole tissue');
     invalidateAnalysis();
   };
@@ -676,10 +698,6 @@ export default function Workbench({ userName }: { userName: string }) {
 
   };
 
-  const toggleDrawing = () => {
-    if (drawing) onPointerCancel();
-    setDrawing(!drawing);
-  };
 
   const currentSettings = () => Object.fromEntries((image?.channelCount===1 ? ['grayscale'] as const : profile==='sirius-magenta' ? ['red'] as const : image?.channelCount===2 ? ['red','green'] as const : ['red','green','blue'] as const).map(channel=>[channelSettingsKey(stain,channel), channel===signalChannel ? {...channelSettings[channelSettingsKey(stain,channel)],minimum:minThreshold,maximum:maxThreshold,brightness} : channelSettings[channelSettingsKey(stain,channel)]??suggestions[channel]]));
   const saveReference = () => {
@@ -687,7 +705,7 @@ export default function Workbench({ userName }: { userName: string }) {
     const settings=currentSettings();
     try {
       const sample=studySample.trim()||sampleId.trim(),id=JSON.stringify([sample,image.sourceSha256,sourceName]);
-      const next=[...references.filter(r=>r.id!==id),{id,sourceId:image.sourceSha256+sourceName,sampleId:sample,groupName:groupName.trim()||'Ungrouped',stain,name:`${sample} / ${sourceName}`,settings,conversion:image.conversionRanges,rois:structuredClone(rois),regionCategory:structure}];
+      const next=[...references.filter(r=>r.id!==id),{id,sourceId:image.sourceSha256+sourceName,sampleId:sample,groupName:groupName.trim()||'Ungrouped',stain,name:`${sample} / ${sourceName}`,settings,conversion:image.conversionRanges,rois:structuredClone(rois),glomeruli:structuredClone(glomeruli),regionCategory:structure}];
       groupAverageThresholds(next,profile==='sirius-magenta');referenceDefaultsRef.current=Object.fromEntries(Object.entries(settings).map(([key,v])=>[key,{minimum:v.minimum,maximum:v.maximum,brightness:1}]));setReferences(next);setMessage(`Saved reference ${next.length}: ${sourceName}`);
     } catch(cause) {setError(errorMessage(cause,'Reference could not be saved.'));}
   };
@@ -697,7 +715,7 @@ export default function Workbench({ userName }: { userName: string }) {
   };
   const finishSample=()=>{
     setProjectTiles(current=>mergeStudyTiles(current,studyTiles));setStudyTiles([]);
-    setStudySample('');setFolderFiles([]);setImage(null);setRois([]);invalidateAnalysis();
+    setStudySample('');setFolderFiles([]);setImage(null);setRois([]);setGlomeruli([]);invalidateAnalysis();
     setMessage(accepted?'Next sample: open its folder. This group’s accepted thresholds remain locked.':'Open the next sample folder to add references to this group.');
   };
   const finishGroup=()=>{
@@ -714,7 +732,7 @@ export default function Workbench({ userName }: { userName: string }) {
     setGroupName(group.name);setStain(group.stain);setStainingPanel(structuredClone(group.panel));setGroupReason(group.reason);
     setReferences(group.references);setAccepted(group.accepted);acceptedRef.current=group.accepted;
     referenceDefaultsRef.current=group.accepted??group.references.at(-1)?.settings??null;
-    setChannelSettings(group.accepted??referenceDefaultsRef.current??{});setImage(null);setStudySample('');setFolderFiles([]);setRois([]);invalidateAnalysis();
+    setChannelSettings(group.accepted??referenceDefaultsRef.current??{});setImage(null);setStudySample('');setFolderFiles([]);setRois([]);setGlomeruli([]);invalidateAnalysis();
     setMessage('Group restored. Open a sample folder to continue with its shared thresholds.');
   };
   const resetStudy=()=>{referenceDefaultsRef.current=null;setReferences([]);setAccepted(null);acceptedRef.current=null;setStudyTiles([]);invalidateAnalysis();};
@@ -748,7 +766,7 @@ export default function Workbench({ userName }: { userName: string }) {
   };
   const saveScreenshot=()=>{
     if(!image)return;
-    const screenshots=captureChannels(image,currentSettings(),{...previewOptions,rois});
+    const screenshots=captureChannels(image,currentSettings(),{...previewOptions,rois,glomeruli});
     setPngEditor({source:screenshots.all,filename:`${safeExportName(sampleId)}_four_channels.png`});
   };
 
@@ -777,7 +795,7 @@ export default function Workbench({ userName }: { userName: string }) {
     try {
       const { channelWorkbook } = await import('./lib/workbook-export');
       const collected=mergeStudyTiles(projectTiles,studyTiles);
-      const exportedTiles=collected.length?collected:image?[{id:image.sourceSha256+sourceName,name:sourceName,records:snapshot,screenshots:captureChannels(image,currentSettings(),{...previewOptions,rois}),displaySettings:currentSettings(),reference:false}]:[];
+      const exportedTiles=collected.length?collected:image?[{id:image.sourceSha256+sourceName,name:sourceName,records:snapshot,screenshots:captureChannels(image,currentSettings(),{...previewOptions,rois,glomeruli}),displaySettings:currentSettings(),reference:false}]:[];
       const bytes = await channelWorkbook(snapshot, exportedTiles, [...new Map([...projectReferences,...references].map(r=>[JSON.stringify([r.groupName,r.stain,r.id]),r])).values()], accepted, [...savedGroups.filter(g=>!(accepted&&g.name===groupName&&g.stain===stain)),{name:groupName,stain,accepted,reason:groupReason}]);
       const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       const link = document.createElement('a');
@@ -854,12 +872,18 @@ export default function Workbench({ userName }: { userName: string }) {
 
           <label className="field-label" htmlFor="roi-category">ROI category</label>
           <select id="roi-category" className="select-input" value={structure} onChange={(event) => chooseStructure(event.target.value)}>{STRUCTURE_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select>
-          <p className="validation-note">Circle each glomerulus or outline tissue to keep. Only pixels inside the outlines are measured; overlapping outlines count once. With no outline, Whole tissue uses the full image unless slide-background removal is enabled.</p>
+          <p className="validation-note">{structure==='Glomeruli' ? 'One pooled positive-area percentage per tile and channel across all glomerular outlines. Overlaps count once.' : structure==='Interstitial region' ? 'Glomeruli are removed from both positive and analyzed area. Tissue regions restrict the measurement; without them, all tissue outside glomeruli is measured.' : 'Outline tissue to keep. Whole tissue without regions uses the full image unless slide-background removal is enabled.'}</p>
 
-          {<>
+          {['Glomeruli','Interstitial region'].includes(structure) && <>
+            {structure==='Interstitial region' && <><label className="field-label" htmlFor="outline-target">Draw outlines for</label><select id="outline-target" className="select-input" value={drawingTarget} onChange={e=>{onPointerCancel();setDrawingTarget(e.target.value);}}><option value="glomeruli">Glomeruli to exclude</option><option value="region">Tissue measurement region</option></select></>}
+            <p className="validation-note">Orange G outlines are shared between glomerular and interstitial modes in this tile. Drag around each glomerulus and release to close. Export before opening another tile.</p>
+            <div className="roi-controls"><button type="button" disabled={!image} aria-pressed={drawing && drawingTarget==='glomeruli'} onClick={()=>{onPointerCancel();setDrawingTarget('glomeruli');setDrawing(!(drawing && drawingTarget==='glomeruli'));}}>Outline glomeruli</button><button type="button" disabled={!glomeruli.length} onClick={()=>{onPointerCancel();setGlomeruli([]);invalidateAnalysis();}}>Clear glomeruli ({glomeruli.length})</button></div>
+            {glomeruli.map((_,i)=><div className="roi-row" key={i}><strong>G{i+1}</strong><button type="button" aria-label={`Delete glomerulus ${i+1}`} onClick={()=>{setGlomeruli(current=>current.filter((_,j)=>j!==i));invalidateAnalysis();}}>Delete outline</button></div>)}
+          </>}
+          {structure!=='Glomeruli' && <>
             <label className="field-label" htmlFor="draw-shape">Outline tool</label><select id="draw-shape" value={drawShape} onChange={e=>setDrawShape(e.target.value as 'freehand'|'rectangle')} className="select-input"><option value="freehand">Freehand — circle tissue / glomeruli</option><option value="rectangle">Rectangle crop</option></select><div className="roi-controls">
               <button type="button" disabled={!image} onClick={addCentralRoi}>Add region</button>
-              <button type="button" className={drawing ? 'active' : ''} disabled={!image} aria-pressed={drawing} onClick={toggleDrawing}>{drawing ? 'Drawing regions' : 'Draw regions'}</button>
+              <button type="button" className={drawing ? 'active' : ''} disabled={!image} aria-pressed={drawing} onClick={()=>{onPointerCancel();setDrawingTarget('region');setDrawing(!(drawing && drawingTarget==='region'));}}>{drawing && drawingTarget==='region' ? 'Drawing regions' : 'Draw regions'}</button>
               <button type="button" disabled={!rois.length} onClick={() => { setRois([]); invalidateAnalysis(); }}>Clear ({rois.length})</button>
             </div>
             {rois.length>0 && <RoiEditor rois={rois} onUpdate={updateRoi} onDelete={deleteRoi}/>}
@@ -918,8 +942,8 @@ export default function Workbench({ userName }: { userName: string }) {
             {!image && <div className="empty-canvas"><strong>No image open</strong><span>Choose a TIFF, JP2, ND2 file, or folder.</span></div>}
             {(draggingFile || !image) && <button type="button" className="central-dropzone" disabled={loading} onClick={() => fileInput.current?.click()}><strong>Drop ND2, TIFF, or JP2</strong><span>or choose a file</span></button>}
 
-            {drawing && <div className="drawing-hint">Draw around tissue or a glomerulus on the composite; release to close the outline</div>}
-            {view !== 'original' && <div className="legend"><span><i className="positive" /> Positive stain</span><span><i className="structure" /> Selected region</span><span><i className="excluded" /> Excluded</span></div>}
+            {drawing && <div className="drawing-hint">{drawingTarget==='glomeruli' ? 'Draw around a glomerulus on the composite; release to close' : 'Draw the tissue region on the composite; release to close'}</div>}
+            {view !== 'original' && <div className="legend"><span><i className="positive" /> Positive stain</span><span><i className="structure" /> Selected region</span><span><i style={{background:'#ffbf69'}} /> Glomeruli</span><span><i className="excluded" /> Excluded</span></div>}
           </div>
 
           <div className={`analysis-message ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}><i>{error ? '!' : loading ? '…' : analysisRecord ? '✓' : 'i'}</i><span>{error || message}</span></div>

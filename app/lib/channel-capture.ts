@@ -15,7 +15,7 @@ export function captureChannels(image:DecodedImage, settings:Record<string,Chann
   c.putImageData(new ImageData(renderPreview(preview,channel,ranges,brightness,options,'original',lower),preview.width,preview.height),0,0);
   // Selected outlines are shown in screenshot exports, without detection colors.
   c.strokeStyle='#ffffff';c.lineWidth=1;
-  for(const roi of options.rois) {
+  for(const roi of [...options.rois,...(options.glomeruli??[])]) {
     const sx=preview.width/image.width,sy=preview.height/image.height;
     if(roi.points?.length) {c.beginPath();roi.points.forEach((p,j)=>{if(j)c.lineTo(p.x*sx,p.y*sy);else c.moveTo(p.x*sx,p.y*sy);});c.closePath();c.stroke();}
     else c.strokeRect(roi.x*sx,roi.y*sy,roi.width*sx,roi.height*sy);
@@ -23,7 +23,7 @@ export function captureChannels(image:DecodedImage, settings:Record<string,Chann
   output[channel]=canvas.toDataURL('image/png');
   if(channel!=='composite') {
    const value=settings[channelSettingsKey(options.stain,channel)];
-   const overlay={...options,signalChannel:channel,minThreshold:value?.minimum??options.minThreshold,maxThreshold:value?.maximum??options.maxThreshold,rois:options.rois.map(r=>({...r,x:r.x*preview.width/image.width,y:r.y*preview.height/image.height,width:r.width*preview.width/image.width,height:r.height*preview.height/image.height,points:r.points?.map(p=>({x:p.x*preview.width/image.width,y:p.y*preview.height/image.height}))}))};
+   const overlay={...options,glomeruli:options.glomeruli?.map(r=>({...r,x:r.x*preview.width/image.width,y:r.y*preview.height/image.height,width:r.width*preview.width/image.width,height:r.height*preview.height/image.height,points:r.points?.map(p=>({x:p.x*preview.width/image.width,y:p.y*preview.height/image.height}))})),signalChannel:channel,minThreshold:value?.minimum??options.minThreshold,maxThreshold:value?.maximum??options.maxThreshold,rois:options.rois.map(r=>({...r,x:r.x*preview.width/image.width,y:r.y*preview.height/image.height,width:r.width*preview.width/image.width,height:r.height*preview.height/image.height,points:r.points?.map(p=>({x:p.x*preview.width/image.width,y:p.y*preview.height/image.height}))}))};
    const overlayCanvas=document.createElement('canvas');overlayCanvas.width=preview.width;overlayCanvas.height=preview.height;
    overlayCanvas.getContext('2d')!.putImageData(new ImageData(renderPreview(preview,channel,ranges,brightness,overlay,'overlay',lower),preview.width,preview.height),0,0);
    output[channel+'-counted']=overlayCanvas.toDataURL('image/png');
